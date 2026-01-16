@@ -404,7 +404,6 @@ elif page == "2. 方案二：價差避險型 (Bull Call Spread)":
         """, unsafe_allow_html=True)
 
     st.markdown("#### 設計模式選擇")
-    # [修改] 交換選項順序，Cap 先決列為第一順位
     solve_mode = st.radio("請選擇設計邏輯：", 
                           ["模式 A：固定 Cap (自訂) ➜ 算出 參與率 (PR)", 
                            "模式 B：固定參與率 (100%) ➜ 算出 Cap"])
@@ -412,7 +411,6 @@ elif page == "2. 方案二：價差避險型 (Bull Call Spread)":
     
     col1, col2 = st.columns(2)
     
-    # 共用計算：ATM Call 價格
     T_pricing = 1.0
     call_atm_raw = bs_price(S0, S0, T_pricing, r_rf, div_q, sigma_atm, 'call')
     if np.isnan(call_atm_raw):
@@ -422,23 +420,18 @@ elif page == "2. 方案二：價差避險型 (Bull Call Spread)":
     
     final_cap = 0; final_pr = 0; cap_display = ""
     
-    # [修改] 邏輯互換：模式 A 現在是「固定 Cap」
     if solve_mode == "模式 A：固定 Cap (自訂) ➜ 算出 參與率 (PR)":
         with col1:
             st.subheader("模式 A：鎖定 Cap (競品對標)")
-            # 讓 User 決定 Cap 是多少
             target_cap_input = st.slider("請設定目標 Cap %", 3.0, 15.0, 8.0, step=0.5) / 100
             
         with col2:
             st.subheader("試算結果")
             k_cap_target = S0 * (1 + target_cap_input)
             
-            # 根據 Skew 算出該 Strike 的波動率
             vol_skewed = get_vol_at_strike(k_cap_target, S0, sigma_atm, skew_slope)
-            # 算出賣出 Call 的價格
             call_short_raw = bs_price(S0, k_cap_target, T_pricing, r_rf, div_q, vol_skewed, 'call')
             
-            # 價差單的單位成本 = 買 Call (Ask) - 賣 Call (Bid)
             eq_rev_short = call_short_raw * (1 - opt_spread_cost)
             unit_spread_cost = call_atm_ask - eq_rev_short
             
@@ -446,7 +439,6 @@ elif page == "2. 方案二：價差避險型 (Bull Call Spread)":
                  st.error("組合單成本異常 (賣比買貴)，請檢查波動率設定")
                  final_pr = 0
             else:
-                # 預算 / 單位成本 = 參與率
                 final_pr = annual_option_budget_amt / unit_spread_cost
             
             final_cap = target_cap_input
@@ -461,22 +453,16 @@ elif page == "2. 方案二：價差避險型 (Bull Call Spread)":
     else: # 模式 B：固定參與率 (100%)
         with col1:
             st.subheader("模式 B：鎖定 PR = 100%")
-            # 計算 100% PR 下，買 ATM Call 需要多少錢，然後看預算缺口
             funding_gap = call_atm_ask - annual_option_budget_amt
             st.metric("年度預算缺口", f"-${funding_gap:.2f}", help="為了達到 100% 參與率，我們還缺多少錢，需透過賣 Call 來補")
 
         with col2:
             st.subheader("試算結果")
             if funding_gap <= 0:
-                # 預算超多，不用賣 Call 也能 100%
                 final_cap = 9.99; cap_display = "無上限"
                 final_pr = 1.0
             else:
-                # 需要賣出 Call 來填補缺口
-                # 需賣出的金額 = 缺口 / (1 - 交易成本)
                 target_short_val = funding_gap / (1 - opt_spread_cost)
-                
-                # 求解：哪個 Strike 的 Call 價格等於 target_short_val
                 k_cap, vol_at_cap = solve_strike_dynamic(target_short_val, S0, T_pricing, r_rf, div_q, sigma_atm, skew_slope, opt_spread_cost)
                 
                 if k_cap > 0:
@@ -493,25 +479,16 @@ elif page == "2. 方案二：價差避險型 (Bull Call Spread)":
             if final_cap > 0 and final_cap < 9.0:
                 st.info(f"Cap Moneyness = {final_cap+1:.2f}x | Implied Vol(Cap) = {vol_at_cap:.2%}")
 
-    # 圖表
     st.markdown("---")
     st.subheader("1. 年度損益模擬 (Annual Payoff)")
     
-    # 設定模擬範圍：-10% 至 +30%
     market_moves = np.linspace(-0.10, 0.30, 400)
-    
-    # 計算 Payoff (含 0% 保本與 Cap 封頂)
     y_opt2 = [max(0, min(m * final_pr, final_cap)) for m in market_moves]
     
     fig = go.Figure()
-    
-    # 畫出虛線 (Index)
     fig.add_trace(go.Scatter(x=market_moves*100, y=market_moves*100, name="Index Performance", line=dict(color='gray', dash='dot')))
-    
-    # 畫出紅線 (Client Payoff)
     fig.add_trace(go.Scatter(x=market_moves*100, y=np.array(y_opt2)*100, name=f"Client Payoff (Cap={cap_display})", line=dict(color='#C0392B', width=4)))
     
-    # 標註 Cap
     if isinstance(final_cap, (int, float)):
         anno_x = 25 
         fig.add_annotation(
@@ -692,24 +669,40 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
     st.markdown("### 交易執行計算機 (Execution Calculator)")
     st.caption("專為交易室設計：支援雙向求解（鎖定PR求Cap / 鎖定Cap求PR），快速生成精確指令。")
 
-    # --- 1. 交易參數輸入 ---
+# --- 1. 交易參數輸入 ---
     with st.container():
         st.markdown("#### 1. 資金與標的設定")
         
-        # 輸入模式切換 (預算% vs 金額$)
+        # 輸入模式切換
         input_mode = st.radio("預算輸入方式", ["方式 A：依預算比例 (%)", "方式 B：依權利金總額 ($)"], horizontal=True)
         
         c1, c2, c3 = st.columns(3)
         
         with c1:
-            notional_amt = st.number_input("名目本金 (Notional) USD", value=10_000_000, step=1_000_000, format="%d")
+            # [修改技巧] format="%d" 確保顯示整數，並在 help 中提示輸入格式
+            notional_amt = st.number_input(
+                "名目本金 (Notional) USD", 
+                value=10000000, 
+                step=1000000, 
+                format="%d"
+            )
+            # [新增] 在下方用藍字顯示千分位，讓使用者確認金額
+            st.markdown(f":blue[**確認金額: ${notional_amt:,.0f}**]")
             
             if input_mode == "方式 A：依預算比例 (%)":
                 exec_budget_pct = st.number_input("核定預算 %", value=2.80, step=0.05, format="%.2f") / 100
                 total_premium_amt = notional_amt * exec_budget_pct
                 st.caption(f"換算總權利金: USD {total_premium_amt:,.0f}")
             else:
-                total_premium_amt = st.number_input("可用權利金總額 (Premium) USD", value=280_000, step=10_000, format="%d")
+                total_premium_amt = st.number_input(
+                    "可用權利金總額 (Premium) USD", 
+                    value=280000, 
+                    step=10000, 
+                    format="%d"
+                )
+                # [新增] 同樣加上千分位確認
+                st.markdown(f":blue[**確認金額: ${total_premium_amt:,.0f}**]")
+                
                 exec_budget_pct = total_premium_amt / notional_amt if notional_amt > 0 else 0
                 st.caption(f"換算預算比例: {exec_budget_pct:.2%}")
 
@@ -719,7 +712,6 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
         with c3:
             exec_strategy = st.selectbox("避險策略", ["Call Spread (價差單)", "Call Only (單邊買權)"])
             
-            # [新增] 計算目標選擇 (只在 Call Spread 有效)
             target_val_input = 0.0
             calc_target = "N/A"
             
@@ -749,7 +741,6 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
     specs_output = {} 
 
     if exec_strategy == "Call Only (單邊買權)":
-        # 邏輯：預算 / ATM價格 = PR
         cal_pr = exec_budget_pct * spot_price / call_atm_ask_exec
         specs_output['PR'] = cal_pr
         specs_output['Cap'] = None
@@ -760,18 +751,16 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
             st.metric("可執行參與率 (Achievable PR)", f"{cal_pr:.2%}", delta=f"預算 {exec_budget_pct:.2%}")
 
     else: # Call Spread
-        budget_per_unit = spot_price * exec_budget_pct # 每一單位指數能花的錢
+        budget_per_unit = spot_price * exec_budget_pct 
         
         if calc_target == "鎖定 PR ➔ 求 Cap":
-            # 邏輯：預算 = (ATM - OTM) * PR  =>  OTM = ATM - (預算/PR)
             target_pr = target_val_input
             target_cost = call_atm_ask_exec - (budget_per_unit / target_pr)
             
             if target_cost <= 0:
                 st.error("預算過高或目標 PR 過低，無需賣出 Call")
-                specs_output['K_Upper'] = None # 避免報錯
+                specs_output['K_Upper'] = None
             else:
-                # 反推 OTM Strike
                 target_theoretical_short = target_cost / (1 - opt_spread_cost)
                 k_cap_exec, _ = solve_strike_dynamic(target_theoretical_short, spot_price, 1.0, r_rf, div_q, sigma_atm, skew_slope, opt_spread_cost)
                 cap_rate = (k_cap_exec / spot_price) - 1
@@ -785,16 +774,13 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
                     st.metric("推算封頂 (Achievable Cap)", f"{cap_rate:.2%}", delta=f"Strike: {k_cap_exec:.0f}")
                     
         else: # 鎖定 Cap ➔ 求 PR
-            # 邏輯：預算 = (ATM - OTM) * PR  =>  PR = 預算 / (ATM - OTM)
             target_cap = target_val_input
             k_cap_exec = spot_price * (1 + target_cap)
             
-            # 算出 OTM Call 價格
             vol_cap = get_vol_at_strike(k_cap_exec, spot_price, sigma_atm, skew_slope)
             c_short = bs_price(spot_price, k_cap_exec, 1.0, r_rf, div_q, vol_cap, 'call')
             c_short_bid = c_short * (1 - opt_spread_cost)
             
-            # 價差單成本
             spread_cost = call_atm_ask_exec - c_short_bid
             
             if spread_cost <= 0:
@@ -817,14 +803,11 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
     st.markdown("#### 3. 交易指令 (Execution Ticket)")
     
     if specs_output.get('K_Upper') or exec_strategy == "Call Only (單邊買權)":
-        # 計算口數
         lots_raw = (notional_amt * specs_output['PR']) / (spot_price * contract_mult)
         lots_round = int(round(lots_raw))
         
-        # 建立表格數據
         ticket_data = []
         
-        # Leg 1: Buy ATM Call
         ticket_data.append({
             "Direction": "BUY",
             "Type": "Call",
@@ -834,7 +817,6 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
             "Est. Price": f"{call_atm_ask_exec:.2f}"
         })
         
-        # Leg 2: Sell OTM Call (If Spread)
         if specs_output.get('K_Upper'):
             vol_cap = get_vol_at_strike(specs_output['K_Upper'], spot_price, sigma_atm, skew_slope)
             c_short = bs_price(spot_price, specs_output['K_Upper'], 1.0, r_rf, div_q, vol_cap, 'call')
@@ -852,7 +834,6 @@ elif page == "4. 交易執行計算機 (Trader Execution)":
         df_ticket = pd.DataFrame(ticket_data)
         st.table(df_ticket)
         
-        # 生成文字
         if input_mode == "方式 B：依權利金總額 ($)":
             budget_str = f"USD {total_premium_amt:,.0f} ({exec_budget_pct:.2%})"
         else:
@@ -880,5 +861,5 @@ BUY {lots_round}x SPY 1Y {specs_output['K_Lower']:.0f} Call
 Net Budget: {budget_str}
             """
             
-        st.caption("複製下方指令 (Click copy icon on top-right)")
+        st.caption("複製下方指令")
         st.code(trade_text.strip(), language="text")
